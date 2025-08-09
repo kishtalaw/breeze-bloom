@@ -1,0 +1,393 @@
+<!doctype html>
+
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Breeze Bloom — Single Page</title>
+  <style>
+    :root{
+      --bg-top: #E8F7FF;
+      --bg-bottom: #DCF3FF;
+      --player: #7EC8E3;
+      --accent: #FFD6A5;
+      --muted: #B3CDE0;
+      --ui: #2B3948;
+    }
+    html,body{height:100%;margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,'Helvetica Neue',Arial}
+    body{display:flex;align-items:center;justify-content:center;background:linear-gradient(180deg,var(--bg-top),var(--bg-bottom));}
+    #game-wrap{width:100%;max-width:900px;height:640px;box-shadow:0 12px 40px rgba(43,57,72,0.12);border-radius:12px;overflow:hidden;position:relative}
+    canvas{display:block;width:100%;height:100%;background:transparent}/* UI overlays */
+.ui-top{position:absolute;top:12px;left:12px;right:12px;display:flex;justify-content:space-between;align-items:center;pointer-events:none}
+.score{font-size:20px;color:var(--ui);font-weight:600;backdrop-filter:blur(4px);padding:8px 12px;border-radius:10px;background:rgba(255,255,255,0.6);pointer-events:auto}
+.right-controls{display:flex;gap:8px;align-items:center}
+.small-btn{background:rgba(255,255,255,0.6);padding:6px 8px;border-radius:8px;font-weight:600;color:var(--ui);cursor:pointer;pointer-events:auto}
+.meter-wrap{display:flex;align-items:center;gap:8px}
+.meter{width:56px;height:56px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.65);pointer-events:auto}
+.tap-hint{position:absolute;left:50%;top:55%;transform:translate(-50%,-50%);background:rgba(255,255,255,0.7);padding:10px 14px;border-radius:999px;color:var(--ui);font-weight:700;pointer-events:none;animation:float 1.6s ease-in-out infinite}
+@keyframes float{0%{transform:translate(-50%,-48%)}50%{transform:translate(-50%,-52%)}100%{transform:translate(-50%,-48%)}}
+
+.modal{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);background:white;padding:18px;border-radius:12px;box-shadow:0 8px 30px rgba(43,57,72,0.12);min-width:260px;display:none}
+.modal.show{display:block}
+.modal h3{margin:0 0 8px 0;color:var(--ui)}
+.modal p{margin:0 0 12px 0;color:#50606f}
+.modal button{background:var(--player);border:none;padding:8px 12px;border-radius:8px;color:white;font-weight:700;cursor:pointer}
+
+footer{position:absolute;left:12px;bottom:12px;color:#3e5666;font-size:13px}
+
+/* responsive tweaks */
+@media (max-width:520px){#game-wrap{height:520px}}
+
+  </style>
+</head>
+<body>
+  <div id="game-wrap">
+    <canvas id="game"></canvas><div class="ui-top">
+  <div class="score" id="score">Score: 0</div>
+  <div class="right-controls">
+    <div class="meter-wrap">
+      <div style="font-size:12px;color:#50606f">Bloom</div>
+      <div class="meter" id="bloomMeter">0/5</div>
+    </div>
+    <div class="small-btn" id="muteBtn" title="Toggle sound">🔈</div>
+  </div>
+</div>
+
+<div class="tap-hint" id="tapHint">Tap / Click / Space</div>
+
+<div class="modal" id="modal">
+  <h3 id="modalTitle">Nice!</h3>
+  <p id="modalText">You unlocked a blossom.</p>
+  <div style="display:flex;gap:8px;justify-content:flex-end">
+    <button id="shareBtn">Download snapshot</button>
+    <button id="closeModalBtn" style="background:var(--muted);color:#16303b">Close</button>
+  </div>
+</div>
+
+<footer>Tip: Daily seed mode keeps the obstacle pattern the same for everyone today.</footer>
+
+  </div><script>
+/* Breeze Bloom — Single file prototype
+   - One-tap control
+   - Seeded daily obstacle generation
+   - Bloom meter + blossom particle animation
+   - LocalHighScore
+   - Canvas snapshot download for sharing
+*/
+
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d', { alpha: true });
+  let W = 900, H = 640;
+  function resize() {
+    const rect = document.getElementById('game-wrap').getBoundingClientRect();
+    canvas.width = Math.max(480, Math.floor(rect.width * devicePixelRatio));
+    canvas.height = Math.max(360, Math.floor(rect.height * devicePixelRatio));
+    canvas.style.width = rect.width + 'px';
+    canvas.style.height = rect.height + 'px';
+    W = canvas.width; H = canvas.height;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // UI elements
+  const scoreEl = document.getElementById('score');
+  const bloomEl = document.getElementById('bloomMeter');
+  const tapHint = document.getElementById('tapHint');
+  const modal = document.getElementById('modal');
+  const modalTitle = document.getElementById('modalTitle');
+  const modalText = document.getElementById('modalText');
+  const shareBtn = document.getElementById('shareBtn');
+  const closeModalBtn = document.getElementById('closeModalBtn');
+  const muteBtn = document.getElementById('muteBtn');
+
+  let soundOn = true;
+  muteBtn.addEventListener('click', () => { soundOn = !soundOn; muteBtn.textContent = soundOn ? '🔈' : '🔇'; });
+
+  // Seeded RNG using daily seed (YYYYMMDD) for daily seeded mode
+  function getDailySeedNumber() {
+    const today = new Date();
+    // Use user's local date for seed (keeps "daily" consistent per user timezone)
+    const y = today.getFullYear();
+    const m = String(today.getMonth()+1).padStart(2,'0');
+    const d = String(today.getDate()).padStart(2,'0');
+    return parseInt('' + y + m + d, 10) || 20250809;
+  }
+  function createLCGRandom(seed){
+    let s = seed >>> 0;
+    return function(){ s = (1664525 * s + 1013904223) % 4294967296; return s / 4294967296; }
+  }
+
+  const seed = getDailySeedNumber();
+  const rand = createLCGRandom(seed);
+
+  // Game objects
+  const player = { x: Math.floor(W*0.28), y: Math.floor(H/2), r: Math.round(Math.min(W,H)*0.032), vy:0, rotation:0 };
+  const gravity = 0.55 * (devicePixelRatio/1.5);
+  const gust = -10 * (devicePixelRatio/1.5);
+
+  let obstacles = [];
+  let particles = [];
+  let dewDrops = [];
+
+  let frame = 0;
+  let score = 0;
+  let playing = false;
+  let gameOver = false;
+  let bloom = 0;
+  const bloomTarget = 5;
+
+  // obstacle generation settings
+  const gapBase = Math.round(H * 0.26);
+  const gapMin = Math.round(H * 0.18);
+  let spawnX = W + 200;
+  const obstacleInterval = Math.round(W * 0.65); // distance between obstacles
+
+  // generate seeded obstacles list ahead of time
+  function generateObstacles(count){
+    obstacles = [];
+    let x = spawnX;
+    for(let i=0;i<count;i++){
+      // make gap vary using seeded RNG
+      const gap = Math.max(gapMin, gapBase - Math.floor(rand()*120));
+      const cy = Math.floor(H*0.2 + rand() * (H*0.6));
+      const ringOffset = (rand()*40 - 20);
+      const ringY = Math.max(80, Math.min(H-80, cy + ringOffset));
+      obstacles.push({ x: x, gap: gap, cy: cy, ringY: ringY, passed:false });
+      x += obstacleInterval;
+    }
+  }
+  generateObstacles(6);
+
+  // Dew drops appear occasionally inside the gap
+  function maybeSpawnDew(ob){
+    if (rand() < 0.25){
+      const x = ob.x + Math.floor(rand()*80) + 20;
+      const y = ob.ringY + (rand()* (ob.gap/2) * (rand() < 0.5 ? -1 : 1) );
+      dewDrops.push({x:x,y:y,r:Math.max(6, Math.round(player.r*0.5)), taken:false});
+    }
+  }
+
+  // particle helpers for blossom
+  function spawnParticle(x,y,color){
+    particles.push({x:x,y:y,vx:(rand()*6-3),vy:(rand()*-6-1),life:60,age:0,color:color});
+  }
+
+  // simple sound using Oscillator (optional)
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  let audioCtx = null;
+  function playTone(freq, time=0.08, type='sine', gain=0.06){
+    if(!soundOn) return;
+    if(!AudioCtx) return;
+    if(!audioCtx) audioCtx = new AudioCtx();
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type = type; o.frequency.value = freq; g.gain.value = gain;
+    o.connect(g); g.connect(audioCtx.destination);
+    o.start(); g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + time);
+    o.stop(audioCtx.currentTime + time + 0.02);
+  }
+
+  // input handling
+  function startPlay(){
+    playing = true; gameOver = false; frame = 0; score = 0; bloom = 0; particles=[]; dewDrops=[];
+    player.y = Math.floor(H/2); player.vy = 0; player.rotation = 0;
+    generateObstacles(6);
+    tapHint.style.display = 'none';
+    requestAnimationFrame(loop);
+  }
+
+  function endGame(){
+    gameOver = true; playing = false;
+    // check highscore
+    const prev = parseInt(localStorage.getItem('bb_highscore') || '0',10);
+    if(score > prev){
+      localStorage.setItem('bb_highscore', String(score));
+      // show modal to celebrate new high score
+      modalTitle.textContent = 'New High Score!';
+      modalText.textContent = `You scored ${score} — great flow!`;
+      modal.classList.add('show');
+    } else {
+      modalTitle.textContent = 'Nice run';
+      modalText.textContent = `Score: ${score}`;
+      modal.classList.add('show');
+    }
+  }
+
+  function tap(){
+    if(!playing){ startPlay(); }
+    if(gameOver) { startPlay(); return; }
+    // apply gust impulse
+    player.vy = gust;
+    playTone(420,0.08,'sine',0.08);
+  }
+
+  // input events
+  canvas.addEventListener('pointerdown', (e)=>{ tap(); });
+  window.addEventListener('keydown', (e)=>{ if(e.code === 'Space') { e.preventDefault(); tap(); } });
+
+  // main loop
+  function loop(){
+    frame++;
+    // physics
+    player.vy += gravity; player.y += player.vy; player.rotation = Math.max(-0.6, Math.min(0.8, player.vy/18));
+
+    // move obstacles left
+    for(let ob of obstacles){ ob.x -= 3 * (devicePixelRatio/1.5); }
+
+    // move dew drops
+    for(let d of dewDrops){ d.x -= 3 * (devicePixelRatio/1.5); }
+
+    // spawn more obstacles as needed
+    if(obstacles.length && obstacles[obstacles.length-1].x < W*0.9){
+      // append new obstacle deterministically using seeded RNG
+      const gap = Math.max(gapMin, gapBase - Math.floor(rand()*120));
+      const cy = Math.floor(H*0.18 + rand() * (H*0.64));
+      const ringOffset = (rand()*40 - 20);
+      const ringY = Math.max(80, Math.min(H-80, cy + ringOffset));
+      obstacles.push({x: obstacles[obstacles.length-1].x + obstacleInterval, gap: gap, cy: cy, ringY: ringY, passed:false});
+      maybeSpawnDew(obstacles[obstacles.length-1]);
+    }
+
+    // remove offscreen
+    if(obstacles.length && obstacles[0].x < -200){ obstacles.shift(); }
+    if(dewDrops.length && dewDrops[0].x < -100){ dewDrops.shift(); }
+
+    // collision detection with pillars
+    for(let ob of obstacles){
+      const gapTop = ob.ringY - ob.gap/2;
+      const gapBottom = ob.ringY + ob.gap/2;
+      const pillarW = Math.round(Math.min(W,H)*0.12);
+      // collision with top pillar
+      if(player.x + player.r > ob.x && player.x - player.r < ob.x + pillarW){
+        if(player.y - player.r < gapTop || player.y + player.r > gapBottom){
+          if(!gameOver) { playTone(120,0.2,'sawtooth',0.16); endGame(); }
+        }
+      }
+      // passing ring detection
+      if(!ob.passed && player.x > ob.x + pillarW/2){
+        // check vertical distance to ring center
+        const dx = player.x - (ob.x + pillarW/2);
+        const dy = player.y - ob.ringY;
+        const dist = Math.sqrt(dx*dx + dy*dy);
+        const ringRadius = Math.max(28, Math.round(player.r*3.2));
+        if(Math.abs(dy) < ob.gap/2 + 8){
+          ob.passed = true; score += 10; // base for passing
+          // Bloom if near center
+          if(Math.abs(dy) < ringRadius*0.6){ bloom = Math.min(bloomTarget, bloom + 1); playTone(720,0.06,'triangle',0.06); }
+          // small reward
+        }
+      }
+    }
+
+    // dew pickup
+    for(let d of dewDrops){ if(!d.taken && Math.hypot(d.x - player.x, d.y - player.y) < (d.r + player.r*0.8)){ d.taken=true; score += 25; playTone(980,0.06,'sine',0.08); for(let i=0;i<8;i++) spawnParticle(d.x,d.y,'#FFD6A5'); } }
+
+    // particle updates
+    for(let p of particles){ p.age++; p.x += p.vx; p.y += p.vy; p.vy += 0.18; }
+    particles = particles.filter(p => p.age < p.life);
+
+    // check out of bounds
+    if(player.y - player.r > H || player.y + player.r < 0){ if(!gameOver) { endGame(); } }
+
+    // scoring by distance slowly
+    score += 0.02; // small incremental
+
+    // render
+    draw();
+
+    if(!gameOver){ requestAnimationFrame(loop); }
+  }
+
+  function draw(){
+    // clear
+    ctx.clearRect(0,0,W,H);
+
+    // scale down for drawing convenience (we are in device pixels)
+    // background subtle gradient is via CSS; canvas draws foreground
+
+    // draw obstacles (pillars) and gates
+    for(let ob of obstacles){
+      const pillarW = Math.round(Math.min(W,H)*0.12);
+      // top pillar
+      const gapTop = ob.ringY - ob.gap/2;
+      const gapBottom = ob.ringY + ob.gap/2;
+
+      // top
+      ctx.fillStyle = '#93C2D9';
+      ctx.fillRect(ob.x, 0, pillarW, Math.max(0, gapTop));
+      // bottom
+      ctx.fillRect(ob.x, gapBottom, pillarW, H - gapBottom);
+
+      // ring (air-gate)
+      const ringX = ob.x + pillarW/2;
+      const ringY = ob.ringY;
+      const ringR = Math.max(28, Math.round(player.r*3.2));
+      // outer glow
+      ctx.beginPath(); ctx.lineWidth = 6; ctx.strokeStyle = 'rgba(255,214,165,0.65)'; ctx.arc(ringX, ringY, ringR+6, 0, Math.PI*2); ctx.stroke();
+      // main ring
+      ctx.beginPath(); ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(255,214,165,0.98)'; ctx.arc(ringX, ringY, ringR, 0, Math.PI*2); ctx.stroke();
+    }
+
+    // draw dew drops
+    for(let d of dewDrops){ if(d.taken) continue; ctx.beginPath(); ctx.fillStyle = '#FFD6A5'; ctx.ellipse(d.x, d.y, d.r, d.r*1.1, 0,0,Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.fillStyle='rgba(255,255,255,0.6)'; ctx.ellipse(d.x-3, d.y-4, d.r*0.35, d.r*0.45, 0,0,Math.PI*2); ctx.fill(); }
+
+    // draw player (leaf)
+    ctx.save(); ctx.translate(player.x, player.y); ctx.rotate(player.rotation);
+    // leaf body
+    ctx.beginPath(); ctx.fillStyle = 'rgba(126,200,227,0.98)'; ctx.ellipse(0,0, player.r*1.3, player.r, 0, 0, Math.PI*2); ctx.fill();
+    // leaf center vein
+    ctx.beginPath(); ctx.strokeStyle='rgba(255,255,255,0.6)'; ctx.lineWidth=2; ctx.moveTo(-player.r*0.6,0); ctx.quadraticCurveTo(0,0,player.r*0.6,0); ctx.stroke();
+    // stem
+    ctx.beginPath(); ctx.strokeStyle='rgba(124,175,188,0.9)'; ctx.lineWidth=3; ctx.moveTo(player.r*0.6,0); ctx.lineTo(player.r*1.6, player.r*0.9); ctx.stroke();
+    ctx.restore();
+
+    // blossom/particles
+    for(let p of particles){ ctx.beginPath(); ctx.fillStyle = p.color; ctx.globalAlpha = 0.9 - (p.age/p.life)*0.9; ctx.ellipse(p.x, p.y, 5 + (p.age*0.1), 5 + (p.age*0.1), 0,0,Math.PI*2); ctx.fill(); }
+    ctx.globalAlpha = 1;
+
+    // HUD: score and bloom meter
+    scoreEl.textContent = 'Score: ' + Math.floor(score);
+    bloomEl.textContent = bloom + '/' + bloomTarget;
+
+    // bloom trigger
+    if(bloom >= bloomTarget){
+      // trigger blossom
+      for(let i=0;i<80;i++){ spawnParticle(player.x + (rand()-0.5)*player.r*6, player.y + (rand()-0.5)*player.r*6, i%3===0? '#FFD6A5' : '#7EC8E3'); }
+      score += 150; // bonus
+      bloom = 0;
+      // show modal to download snapshot
+      modalTitle.textContent = 'Bloom!';
+      modalText.textContent = `You created a blossom — share the calm.`;
+      modal.classList.add('show');
+    }
+
+    // draw subtle foreground (ground shadow)
+    ctx.fillStyle = 'rgba(255,255,255,0.03)'; ctx.fillRect(0,H-8,W,8);
+  }
+
+  // modal handlers
+  closeModalBtn.addEventListener('click', ()=>{ modal.classList.remove('show'); if(!playing) { tapHint.style.display='block'; } });
+
+  shareBtn.addEventListener('click', ()=>{
+    // download canvas snapshot (PNG)
+    const link = document.createElement('a');
+    link.download = `breeze-bloom-${Date.now()}.png`;
+    try{
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    }catch(e){ window.open(canvas.toDataURL()); }
+  });
+
+  // initial draw to show starting state
+  draw();
+
+  // show highscore in console
+  console.log('Daily seed:', seed, 'Highscore:', localStorage.getItem('bb_highscore')||0);
+
+  // small accessibility: tap hint disappears after first interaction
+  window.addEventListener('pointerdown', ()=>{ tapHint.style.display='none'; }, { once:true });
+
+})();
+</script></body>
+  </html>
