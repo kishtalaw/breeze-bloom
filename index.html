@@ -17,23 +17,53 @@
     html,body{height:100%;margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,'Helvetica Neue',Arial}
     body{display:flex;align-items:center;justify-content:center;background:linear-gradient(180deg,var(--bg-top),var(--bg-bottom));}
     #game-wrap{width:100%;max-width:900px;height:640px;box-shadow:0 12px 40px rgba(43,57,72,0.12);border-radius:12px;overflow:hidden;position:relative}
-    canvas{display:block;width:100%;height:100%;background:transparent}/* UI overlays */
-.ui-top{position:absolute;top:12px;left:12px;right:12px;display:flex;justify-content:space-between;align-items:center;pointer-events:none}
+    canvas{display:block;width:100%;height:100%;background:transparent;position:relative;z-index:2}/* UI overlays */
+.ui-top{position:absolute;top:12px;left:12px;right:12px;display:flex;justify-content:space-between;align-items:center;pointer-events:none;z-index:4}
 .score{font-size:20px;color:var(--ui);font-weight:600;backdrop-filter:blur(4px);padding:8px 12px;border-radius:10px;background:rgba(255,255,255,0.6);pointer-events:auto}
 .right-controls{display:flex;gap:8px;align-items:center}
 .small-btn{background:rgba(255,255,255,0.6);padding:6px 8px;border-radius:8px;font-weight:600;color:var(--ui);cursor:pointer;pointer-events:auto}
 .meter-wrap{display:flex;align-items:center;gap:8px}
 .meter{width:56px;height:56px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.65);pointer-events:auto}
-.tap-hint{position:absolute;left:50%;top:55%;transform:translate(-50%,-50%);background:rgba(255,255,255,0.7);padding:10px 14px;border-radius:999px;color:var(--ui);font-weight:700;pointer-events:none;animation:float 1.6s ease-in-out infinite}
+.tap-hint{position:absolute;left:50%;top:55%;transform:translate(-50%,-50%);background:rgba(255,255,255,0.7);padding:10px 14px;border-radius:999px;color:var(--ui);font-weight:700;pointer-events:none;animation:float 1.6s ease-in-out infinite;user-select:none;-webkit-user-select:none;-ms-user-select:none}
 @keyframes float{0%{transform:translate(-50%,-48%)}50%{transform:translate(-50%,-52%)}100%{transform:translate(-50%,-48%)}}
 
-.modal{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);background:white;padding:18px;border-radius:12px;box-shadow:0 8px 30px rgba(43,57,72,0.12);min-width:260px;display:none}
+.modal{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);background:white;padding:18px;border-radius:12px;box-shadow:0 8px 30px rgba(43,57,72,0.12);min-width:260px;display:none;z-index:6}
 .modal.show{display:block}
 .modal h3{margin:0 0 8px 0;color:var(--ui)}
 .modal p{margin:0 0 12px 0;color:#50606f}
 .modal button{background:var(--player);border:none;padding:8px 12px;border-radius:8px;color:white;font-weight:700;cursor:pointer}
 
-footer{position:absolute;left:12px;bottom:12px;color:#3e5666;font-size:13px}
+/* background message (shown when bloom completes) - sits behind canvas columns for depth */
+.bg-message{
+  position:absolute;
+  left:50%;
+  top:20%;
+  transform:translateX(-50%);
+  font-size:2.2rem;
+  font-weight:700;
+  opacity:0;
+  pointer-events:none; /* never intercept input */
+  z-index:1; /* behind canvas (canvas z-index:2) so columns appear in front */
+  color: rgba(255,255,255,0.95);
+  transition: opacity 300ms ease, transform 300ms ease;
+  text-shadow: 0 3px 10px rgba(0,0,0,0.45);
+  mix-blend-mode: screen;
+  text-align:center;
+  padding:6px 12px;
+  border-radius:10px;
+  user-select:none;
+  -webkit-user-select:none;
+  -ms-user-select:none;
+}
+
+/* visible state */
+.bg-message.show{
+  opacity:0.96;
+  transform:translateX(-50%) translateY(-4px);
+}
+
+/* make footer non-selectable and non-intercepting so taps fall through */
+footer{position:absolute;left:12px;bottom:12px;color:#3e5666;font-size:13px;user-select:none;pointer-events:none;z-index:4}
 
 /* responsive tweaks */
 @media (max-width:520px){#game-wrap{height:520px}}
@@ -42,37 +72,41 @@ footer{position:absolute;left:12px;bottom:12px;color:#3e5666;font-size:13px}
 </head>
 <body>
   <div id="game-wrap">
-    <canvas id="game"></canvas><div class="ui-top">
-  <div class="score" id="score">Score: 0</div>
-  <div class="right-controls">
-    <div class="meter-wrap">
-      <div style="font-size:12px;color:#50606f">Bloom</div>
-      <div class="meter" id="bloomMeter">0/5</div>
+    <canvas id="game"></canvas>
+
+    <!-- Background bloom message (auto-hide) -->
+    <div id="bgMessage" aria-hidden="true" class="bg-message"></div>
+
+    <div class="ui-top">
+      <div class="score" id="score">Score: 0</div>
+      <div class="right-controls">
+        <div class="meter-wrap">
+          <div style="font-size:12px;color:#50606f">Bloom</div>
+          <div class="meter" id="bloomMeter">0/5</div>
+        </div>
+        <div class="small-btn" id="muteBtn" title="Toggle sound">🔈</div>
+      </div>
     </div>
-    <div class="small-btn" id="muteBtn" title="Toggle sound">🔈</div>
+
+    <div class="tap-hint" id="tapHint">Tap / Click / Space</div>
+
+    <div class="modal" id="modal">
+      <h3 id="modalTitle">Nice!</h3>
+      <p id="modalText">You unlocked a blossom.</p>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button id="shareBtn">Download snapshot</button>
+        <button id="closeModalBtn" style="background:var(--muted);color:#16303b">Close</button>
+      </div>
+    </div>
+
+    <footer>Tip: Daily seed mode keeps the obstacle pattern the same for everyone today.</footer>
   </div>
-</div>
 
-<div class="tap-hint" id="tapHint">Tap / Click / Space</div>
-
-<div class="modal" id="modal">
-  <h3 id="modalTitle">Nice!</h3>
-  <p id="modalText">You unlocked a blossom.</p>
-  <div style="display:flex;gap:8px;justify-content:flex-end">
-    <button id="shareBtn">Download snapshot</button>
-    <button id="closeModalBtn" style="background:var(--muted);color:#16303b">Close</button>
-  </div>
-</div>
-
-<footer>Tip: Daily seed mode keeps the obstacle pattern the same for everyone today.</footer>
-
-  </div><script>
-/* Breeze Bloom — Single file prototype
-   - One-tap control
-   - Seeded daily obstacle generation
-   - Bloom meter + blossom particle animation
-   - LocalHighScore
-   - Canvas snapshot download for sharing
+<script>
+/* Breeze Bloom — Single file prototype (patched)
+   - Bloom completion now shows a transient background message (non-blocking)
+   - Tap/hint/footer made non-selectable and non-intercepting
+   - Modal remains for high-score / end-game
 */
 
 (() => {
@@ -100,9 +134,24 @@ footer{position:absolute;left:12px;bottom:12px;color:#3e5666;font-size:13px}
   const shareBtn = document.getElementById('shareBtn');
   const closeModalBtn = document.getElementById('closeModalBtn');
   const muteBtn = document.getElementById('muteBtn');
+  const bgMessageEl = document.getElementById('bgMessage');
 
   let soundOn = true;
   muteBtn.addEventListener('click', () => { soundOn = !soundOn; muteBtn.textContent = soundOn ? '🔈' : '🔇'; });
+
+  // Background message helper (non-blocking, behind canvas)
+  function showBackgroundMessage(text, ms = 1800) {
+    if(!bgMessageEl) return;
+    bgMessageEl.textContent = text;
+    // ensure visible
+    bgMessageEl.classList.add('show');
+    clearTimeout(bgMessageEl._hideTimer);
+    bgMessageEl._hideTimer = setTimeout(() => {
+      bgMessageEl.classList.remove('show');
+      // clear after transition
+      setTimeout(()=>{ bgMessageEl.textContent = ''; }, 320);
+    }, ms);
+  }
 
   // Seeded RNG using daily seed (YYYYMMDD) for daily seeded mode
   function getDailySeedNumber() {
@@ -205,11 +254,11 @@ footer{position:absolute;left:12px;bottom:12px;color:#3e5666;font-size:13px}
       localStorage.setItem('bb_highscore', String(score));
       // show modal to celebrate new high score
       modalTitle.textContent = 'New High Score!';
-      modalText.textContent = `You scored ${score} — great flow!`;
+      modalText.textContent = `You scored ${Math.floor(score)} — great flow!`;
       modal.classList.add('show');
     } else {
       modalTitle.textContent = 'Nice run';
-      modalText.textContent = `Score: ${score}`;
+      modalText.textContent = `Score: ${Math.floor(score)}`;
       modal.classList.add('show');
     }
   }
@@ -303,9 +352,6 @@ footer{position:absolute;left:12px;bottom:12px;color:#3e5666;font-size:13px}
     // clear
     ctx.clearRect(0,0,W,H);
 
-    // scale down for drawing convenience (we are in device pixels)
-    // background subtle gradient is via CSS; canvas draws foreground
-
     // draw obstacles (pillars) and gates
     for(let ob of obstacles){
       const pillarW = Math.round(Math.min(W,H)*0.12);
@@ -352,14 +398,12 @@ footer{position:absolute;left:12px;bottom:12px;color:#3e5666;font-size:13px}
 
     // bloom trigger
     if(bloom >= bloomTarget){
-      // trigger blossom
+      // trigger blossom visuals (particles) + reward
       for(let i=0;i<80;i++){ spawnParticle(player.x + (rand()-0.5)*player.r*6, player.y + (rand()-0.5)*player.r*6, i%3===0? '#FFD6A5' : '#7EC8E3'); }
       score += 150; // bonus
       bloom = 0;
-      // show modal to download snapshot
-      modalTitle.textContent = 'Bloom!';
-      modalText.textContent = `You created a blossom — share the calm.`;
-      modal.classList.add('show');
+      // SHOW NON-BLOCKING BACKGROUND MESSAGE (instead of modal)
+      showBackgroundMessage('Bloom — share the calm', 2000);
     }
 
     // draw subtle foreground (ground shadow)
